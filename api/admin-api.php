@@ -23,6 +23,9 @@ if ($db->connect_error) {
 
 $db->set_charset("utf8mb4");
 
+// ===== MAIL HELPER =====
+require_once __DIR__ . '/mailer_utils.php';
+
 /* ==========================
    INPUT
 ========================== */
@@ -291,15 +294,41 @@ echo json_encode([
         exit();
     }
 
+    // Get transaction details for notification
+    $stmt_details = $db->prepare("
+        SELECT t.user_id, t.trans_amt, t.trans_type, u.user_name, u.user_email
+        FROM user_transactions t
+        LEFT JOIN user_details u ON t.user_id = u.user_id
+        WHERE t.trans_id = ?
+    ");
+    $stmt_details->bind_param("i", $txnId);
+    $stmt_details->execute();
+    $transaction = $stmt_details->get_result()->fetch_assoc();
+    $stmt_details->close();
+
     // Update transaction status to 'declined'
     $stmt = $db->prepare("UPDATE user_transactions SET trans_stat = ? WHERE trans_id = ?");
     $status = 'declined';
     $stmt->bind_param("si", $status, $txnId);
 
     if ($stmt->execute()) {
+        if ($transaction) {
+            $userId = $transaction['user_id'];
+            $notif_title = "Transaction Declined";
+            $notif_desc = "Your " . $transaction['trans_type'] . " of $" . number_format($transaction['trans_amt'], 2) . " has been declined. Please contact support for more information.";
+
+            $stmt_notif = $db->prepare("INSERT INTO user_notifications (user_id, notification, notification_desc, notification_status) VALUES (?, ?, ?, 'unread')");
+            $stmt_notif->bind_param("iss", $userId, $notif_title, $notif_desc);
+            $stmt_notif->execute();
+            $stmt_notif->close();
+
+            if ($transaction['user_email']) {
+                sendEmail($transaction['user_email'], $transaction['user_name'], $notif_title, $notif_desc);
+            }
+        }
         echo json_encode(["success" => true, "message" => "Transaction declined successfully"]);
     } else {
-        echo json_encode(["success" => false, "message" => "Failed to decline transaction: " . $stmt->error]);
+        echo json_encode(["success" => false, "message" => "Failed to decline transaction: " . $db->error]);
     }
 
     $stmt->close();
@@ -319,9 +348,10 @@ echo json_encode([
     try {
         // 1️⃣ Get transaction details
         $stmt = $db->prepare("
-            SELECT user_id, trans_amt, trans_type, trans_stat 
-            FROM user_transactions 
-            WHERE trans_id = ?
+            SELECT t.user_id, t.trans_amt, t.trans_type, t.trans_stat, u.user_name, u.user_email
+            FROM user_transactions t
+            LEFT JOIN user_details u ON t.user_id = u.user_id
+            WHERE t.trans_id = ?
         ");
         $stmt->bind_param("i", $txnId);
         $stmt->execute();
@@ -389,6 +419,10 @@ echo json_encode([
         $stmt_notif->bind_param("iss", $userId, $notif_title, $notif_desc);
         $stmt_notif->execute();
         $stmt_notif->close();
+
+        if ($transaction['user_email']) {
+            sendEmail($transaction['user_email'], $transaction['user_name'], $notif_title, $notif_desc);
+        }
 
         // Commit everything
         $db->commit();

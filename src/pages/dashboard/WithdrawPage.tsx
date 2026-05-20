@@ -130,15 +130,11 @@ export default function WithdrawPage() {
   const handleWithdraw = () => {
     if (!address || !amountUSD) return alert("Enter address and amount");
 
-    // Strictly follow "kyc modal should only pop up if unverified user balance > 500k"
-    // However, if we also want to respect the system setting 'kycRequired':
-    // If setting is ON, it should probably block withdrawal regardless of balance if not verified.
-    // If setting is OFF, it should ONLY block if balance > 500k.
-
-    // Actually, the user's explicit request usually overrides general settings.
-    // "the kyc modal should only pop up if the unverified user has a balance greater than 500000usd"
-
-    // Let's implement exactly what was asked.
+    // Enforce KYC if setting is ON or if user is unverified
+    if (kycRequired && kycStatus !== "verified") {
+      setModal("kyc");
+      return;
+    }
 
     // Show confirm modal
     setModal("confirm");

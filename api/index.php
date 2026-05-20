@@ -36,13 +36,38 @@ function sanitizeInput($input) {
     return mysqli_real_escape_string($conn, trim($input));
 }
 
+// ===== MAIL HELPER =====
+require_once __DIR__ . '/mailer_utils.php';
+
 // ===== CHECK REQUEST =====
 $input = json_decode(file_get_contents('php://input'), true);
 $req = isset($input['q']) ? $input['q'] : '';
 
+// 1️⃣ Check Maintenance Mode
+$settings_res = $conn->query("SELECT setting_key, setting_value FROM system_settings");
+$settings = [];
+if ($settings_res) {
+    while ($row = $settings_res->fetch_assoc()) {
+        $settings[$row['setting_key']] = $row['setting_value'];
+    }
+}
+
+$isMaintenance = ($settings['maintenance_mode'] ?? 'false') === 'true';
+$isRegistrationEnabled = ($settings['registration_enabled'] ?? 'true') !== 'false';
+
+// Block all requests if maintenance is on, EXCEPT for essential ones
+if ($isMaintenance && !in_array($req, ['signin', 'sidebar', 'get_settings'])) {
+    echo json_encode(['success' => false, 'message' => 'System is under maintenance.']);
+    exit();
+}
+
 switch($req) {
 
                         case 'signup':
+                            if (!$isRegistrationEnabled) {
+                                echo json_encode(['success' => false, 'message' => 'Registration is currently disabled']);
+                                exit();
+                            }
                             // Get POST data safely
                             $fname = sanitizeInput($input['username'] ?? '');
                             $email = sanitizeInput($input['email'] ?? '');
@@ -111,6 +136,8 @@ switch($req) {
                         }
 
                         /**  SUCCESS */
+                        sendEmail($email, $fname, "Welcome to BlueVult", "Thank you for joining BlueVult. Your account has been successfully created. Explore our platform and start your investment journey today!");
+
                         echo json_encode([
                             'success' => true,
                             'message' => 'Signup successful',
@@ -399,6 +426,13 @@ $stmt->close();
 
 
             if ($stmt->execute()) {
+                // Get user details for email
+                $u_stmt = $conn->prepare("SELECT user_name, user_email FROM user_details WHERE user_id = ?");
+                $u_stmt->bind_param("i", $uid);
+                $u_stmt->execute();
+                $u_res = $u_stmt->get_result()->fetch_assoc();
+                $u_stmt->close();
+
                 // Notification for deposit
                 $notif_title = "Deposit Request Received";
                 $notif_desc = "Your deposit request for $" . number_format($amount, 2) . " ($btc_equiv $crypto) has been received and is pending approval.";
@@ -406,6 +440,10 @@ $stmt->close();
                 $stmt_notif->bind_param("iss", $uid, $notif_title, $notif_desc);
                 $stmt_notif->execute();
                 $stmt_notif->close();
+
+                if ($u_res) {
+                    sendEmail($u_res['user_email'], $u_res['user_name'], $notif_title, $notif_desc);
+                }
 
             echo json_encode([
             'status' => 'success',
@@ -518,6 +556,13 @@ $stmt->close();
                     $stmt2->bind_param("isids", $uid, $crypto,$amountUSD, $amount, $address);
                     $stmt2->execute();
 
+                    // Get user details for email
+                    $u_stmt = $conn->prepare("SELECT user_name, user_email FROM user_details WHERE user_id = ?");
+                    $u_stmt->bind_param("i", $uid);
+                    $u_stmt->execute();
+                    $u_res = $u_stmt->get_result()->fetch_assoc();
+                    $u_stmt->close();
+
                     // Notification for withdrawal
                     $notif_title = "Withdrawal Request Received";
                     $notif_desc = "Your withdrawal request for $" . number_format($amountUSD, 2) . " ($amount $crypto) has been received and is pending approval.";
@@ -525,6 +570,10 @@ $stmt->close();
                     $stmt_notif->bind_param("iss", $uid, $notif_title, $notif_desc);
                     $stmt_notif->execute();
                     $stmt_notif->close();
+
+                    if ($u_res) {
+                        sendEmail($u_res['user_email'], $u_res['user_name'], $notif_title, $notif_desc);
+                    }
 
                     $conn->commit();
                     echo json_encode(['status' => 'success', 'message' => 'Withdrawal recorded successfully']);
